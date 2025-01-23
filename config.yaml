@@ -1,0 +1,15 @@
+surrealdb:
+  url: ws://localhost:8000
+  table: logs
+  user: root
+  pass: root
+collector:
+  read_pos_dir: /tmp/surreallogs.pos
+  read_interval: 2s
+  watch_paths:
+    - path: ./logs/myapp
+      recursive: true
+  buffer:
+    path: /tmp/surreallogs.buffer
+    max_size: 1MB
+    flush_interval: 3s
