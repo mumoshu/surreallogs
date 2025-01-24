@@ -160,6 +160,11 @@ func (c *Collector) startPipingLogsToQueue(ctx context.Context) {
 				var msg map[string]interface{}
 				if err := json.Unmarshal(line, &msg); err != nil {
 					log.Printf("Failed to unmarshal log entry: %v", err)
+					msg = map[string]interface{}{
+						"message": map[string]string{
+							"text": string(line),
+						},
+					}
 				}
 
 				logEntry := LogEntry{
