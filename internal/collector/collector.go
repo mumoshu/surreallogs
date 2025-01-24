@@ -11,7 +11,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/fsnotify/fsnotify"
 	"github.com/surrealdb/surrealdb.go"
 	"github.com/surrealdb/surreallogs/internal/config"
 	"github.com/surrealdb/surreallogs/internal/metadata"
@@ -27,10 +26,18 @@ type Collector struct {
 	db    *surrealdb.DB
 	queue Queue
 
+	watchingPaths map[string]struct{}
+
 	logEntryCh chan *logEntry
 
-	tailerGroup      *tailerGroup
+	tailerGroup      TailerGroup
 	metadataProvider metadata.Provider
+}
+
+type TailerGroup interface {
+	StartTailing(path string) error
+	StopTailing(path string) error
+	Close() error
 }
 
 func New(cfg *config.Config) (*Collector, error) {
@@ -162,7 +169,7 @@ func ParseHumanReadableSize(size string) (int, error) {
 }
 
 func (c *Collector) Run(ctx context.Context) error {
-	if err := c.startReadingLogs(ctx); err != nil {
+	if err := c.startReadingLogs(); err != nil {
 		return fmt.Errorf("failed to start reading logs: %w", err)
 	}
 
@@ -177,14 +184,55 @@ func (c *Collector) Run(ctx context.Context) error {
 // startReadingLogs starts reading logs from the configured paths and sends them to the queue.
 // It also starts watching the configured paths for new log files and starts collecting logs if
 // a new file is detected.
-func (c *Collector) startReadingLogs(ctx context.Context) error {
+func (c *Collector) startReadingLogs() error {
+	if err := c.restartReadingLogs(); err != nil {
+		return err
+	}
+
+	go func() {
+		ticker := time.NewTicker(1 * time.Minute)
+		defer ticker.Stop()
+
+		for range ticker.C {
+			log.Printf("Restarting log watch and tail")
+			if err := c.restartReadingLogs(); err != nil {
+				log.Printf("Failed to restart reading logs: %v", err)
+			}
+		}
+	}()
+
+	return nil
+}
+
+func (c *Collector) restartReadingLogs() error {
+	paths := map[string]struct{}{}
 	for _, path := range c.cfg.Collector.WatchPaths {
-		if err := c.loadPath(path.Path); err != nil {
+		if err := c.loadPath(path.Path, paths); err != nil {
 			return fmt.Errorf("failed to load path: %w", err)
 		}
-
-		go c.watchPath(ctx, path.Path)
 	}
+
+	current := c.watchingPaths
+	if current == nil {
+		c.watchingPaths = paths
+		return nil
+	}
+
+	for path := range current {
+		if _, ok := paths[path]; !ok {
+			c.tailerGroup.StopTailing(path)
+		}
+	}
+
+	for path := range paths {
+		if _, ok := current[path]; !ok {
+			if err := c.tailerGroup.StartTailing(path); err != nil {
+				return fmt.Errorf("failed to start tailing path: %w", err)
+			}
+		}
+	}
+
+	c.watchingPaths = paths
 
 	return nil
 }
@@ -274,7 +322,7 @@ func (c *Collector) startPipingQueuedLogsToSurrealDB(ctx context.Context) {
 	}()
 }
 
-func (c *Collector) loadPath(path string) error {
+func (c *Collector) loadPath(path string, paths map[string]struct{}) error {
 	if err := filepath.Walk(path, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
@@ -284,9 +332,7 @@ func (c *Collector) loadPath(path string) error {
 			return nil
 		}
 
-		if err := c.tailerGroup.startTailing(path); err != nil {
-			return fmt.Errorf("failed to start collecting logs from %s: %w", path, err)
-		}
+		paths[path] = struct{}{}
 
 		return nil
 	}); err != nil {
@@ -294,59 +340,4 @@ func (c *Collector) loadPath(path string) error {
 	}
 
 	return nil
-}
-
-func (c *Collector) watchPath(ctx context.Context, path string) {
-	log.Printf("Watching path: %s", path)
-
-	watcher, err := fsnotify.NewWatcher()
-	if err != nil {
-		log.Fatalf("Failed to create watcher: %v", err)
-	}
-	defer watcher.Close()
-
-	watcher.Add(path)
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case event := <-watcher.Events:
-			c.handleEvent(event)
-		}
-	}
-}
-
-func (c *Collector) handleEvent(event fsnotify.Event) {
-	if event.Op&fsnotify.Create == fsnotify.Create {
-		log.Printf("New file detected: %s", event.Name)
-
-		if err := c.tailerGroup.startTailing(event.Name); err != nil {
-			log.Printf("Failed to start collecting logs from %s: %v", event.Name, err)
-		}
-	} else if event.Op&fsnotify.Rename == fsnotify.Rename {
-		// Note that Rename is followed by a Create event.
-		//
-		// In general, we need to track the inode of the file to know which file is being renamed to which file.
-		//
-		// In the context of surreallogs, we assume any rename is due to a log rotation,
-		// which means updates to the renamed file will eventually stop.
-		//
-		// But we cannot just ignore the rename event and treat it like a trigger to immediately stop following the log file.
-		// Unlike the Remove event, where we can immediately stop following the log file, because it is now gone,
-		// the renamed file is still there, and there could be updates we have not yet seen, due to race between the updates, our following, and the rename.
-		//
-		// So we need to keep following the log file for a while after the rename event.
-		log.Printf("File renamed: %s", event.Name)
-
-		if err := c.tailerGroup.stopTailing(event.Name); err != nil {
-			log.Printf("Failed to stop collecting logs from %s: %v", event.Name, err)
-		}
-	} else if event.Op&fsnotify.Remove == fsnotify.Remove {
-		log.Printf("File removed: %s", event.Name)
-
-		if err := c.tailerGroup.stopTailing(event.Name); err != nil {
-			log.Printf("Failed to stop collecting logs from %s: %v", event.Name, err)
-		}
-	}
 }

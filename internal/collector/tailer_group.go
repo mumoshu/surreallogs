@@ -55,7 +55,7 @@ func (c *tailerGroup) getIno(path string) (uint64, error) {
 //
 // The collector creates a position file in the given path to track the current position of the log file.
 // The position file survives the collector process, so it can be used to resume reading after a restart.
-func (c *tailerGroup) startTailing(path string) error {
+func (c *tailerGroup) StartTailing(path string) error {
 	ino, err := c.getIno(path)
 	if err != nil {
 		return fmt.Errorf("failed to get inode: %w", err)
@@ -83,7 +83,7 @@ func (c *tailerGroup) startTailing(path string) error {
 // stopTailing stops reading logs from the given path.
 //
 // The position file is deleted to indicate that the collector has stopped reading logs from the given path.
-func (c *tailerGroup) stopTailing(path string) error {
+func (c *tailerGroup) StopTailing(path string) error {
 	ino, err := c.getIno(path)
 	if err != nil {
 		return fmt.Errorf("failed to get inode: %w", err)
@@ -97,6 +97,14 @@ func (c *tailerGroup) stopTailing(path string) error {
 	sc.stop()
 
 	delete(c.inoToSubcollector, ino)
+
+	return nil
+}
+
+func (c *tailerGroup) Close() error {
+	for _, sc := range c.inoToSubcollector {
+		sc.stop()
+	}
 
 	return nil
 }
