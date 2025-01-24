@@ -64,3 +64,7 @@ As we are based on Golang, we can use the upsteram client-go library to collect 
 ## Why a new tool?
 
 My aim is to have a simple and all-in-one tool that can collect logs into SurrealDB, so that I don't have to worry about the growing set of plugins and changing plugin systems like seen in standard log collectors.
+
+## Design
+
+See [docs/design.md](docs/design.md) for more details.
