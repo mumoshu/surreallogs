@@ -97,6 +97,11 @@ func New(cfg *config.Config) (*Collector, error) {
 
 	tg.logLineReadBufferSize = logLineReadBufferSize
 
+	tg2, err := newFsnotifyTailerGroup(tg)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create fsnotify tailer group: %w", err)
+	}
+
 	metadataProvider, err := newMetadataProvider(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create metadata provider: %w", err)
@@ -107,7 +112,7 @@ func New(cfg *config.Config) (*Collector, error) {
 		db:               db,
 		queue:            syncQueue,
 		logEntryCh:       logEntryCh,
-		tailerGroup:      tg,
+		tailerGroup:      tg2,
 		metadataProvider: metadataProvider,
 		mu:               &sync.Mutex{},
 	}, nil

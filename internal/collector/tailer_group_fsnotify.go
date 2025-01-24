@@ -31,11 +31,8 @@ func newFsnotifyTailerGroup(g TailerGroup) (*fsnotifyTailerGroup, error) {
 }
 
 func (g *fsnotifyTailerGroup) start() {
-	for {
-		select {
-		case event := <-g.watcher.Events:
-			g.handleEvent(event)
-		}
+	for event := range g.watcher.Events {
+		g.handleEvent(event)
 	}
 }
 
