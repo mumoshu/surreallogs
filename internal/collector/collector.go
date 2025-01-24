@@ -303,6 +303,7 @@ func (c *Collector) watchPath(ctx context.Context, path string) {
 	if err != nil {
 		log.Fatalf("Failed to create watcher: %v", err)
 	}
+	defer watcher.Close()
 
 	watcher.Add(path)
 
