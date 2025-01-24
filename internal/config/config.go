@@ -27,9 +27,26 @@ type Config struct {
 		} `yaml:"buffer"`
 		// The size of the bounded and reused buffer for batch-readling log lines from the collected log file
 		LogLineReadBufferSize string `yaml:"log_line_read_buffer_size"`
+		// The configuration for enriching log lines with Kubernetes metadata.
+		Metadata struct {
+			// The configuration for Kubernetes metadata provider.
+			// Must be non-empty when you want to enrich log lines with Kubernetes metadata,
+			// i.e. WatchPaths contain one with Path=/var/log/pods Recursive=true.
+			Kubernetes *KubernetesMetadata `yaml:"kubernetes"`
+		} `yaml:"metadata"`
 	} `yaml:"collector"`
 
 	SurrealDB SurrealDB `yaml:"surrealdb"`
+}
+
+type KubernetesMetadata struct {
+	// The path to the kubeconfig file.
+	// Defaults to the value of KUBECONFIG environment variable.
+	Kubeconfig string `yaml:"kubeconfig"`
+	// The cache TTL for Kubernetes metadata. For example, 1m means
+	// the Kubernetes metadata fetching result is cached for 1 minute,
+	// and the call to the Kubernetes API for the log file is throttled to at most only once per minute.
+	CacheTTL string `yaml:"cache_ttl"`
 }
 
 type SurrealDB struct {

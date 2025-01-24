@@ -84,14 +84,46 @@ func New(cfg *config.Config) (*Collector, error) {
 
 	tg.logLineReadBufferSize = logLineReadBufferSize
 
+	metadataProvider, err := newMetadataProvider(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create metadata provider: %w", err)
+	}
+
 	return &Collector{
 		cfg:              cfg,
 		db:               db,
 		queue:            syncQueue,
 		logEntryCh:       logEntryCh,
 		tailerGroup:      tg,
-		metadataProvider: metadata.NewNoop(),
+		metadataProvider: metadataProvider,
 	}, nil
+}
+
+func newMetadataProvider(cfg *config.Config) (metadata.Provider, error) {
+	if k := cfg.Collector.Metadata.Kubernetes; k != nil {
+		cacheTTL, err := time.ParseDuration(k.CacheTTL)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse cache TTL: %w", err)
+		}
+		kubeconfig := k.Kubeconfig
+		if kubeconfig == "" {
+			kubeconfig = os.Getenv("KUBECONFIG")
+		}
+		if kubeconfig == "" {
+			return nil, fmt.Errorf("no kubeconfig specified. Set collector.metadata.kubeconfig in config or KUBECONFIG envvar")
+		}
+		if _, err := os.Stat(kubeconfig); err != nil {
+			return nil, fmt.Errorf("the specified kubeconfig %s could not be located: %w", kubeconfig, err)
+		}
+		kubeMeta, err := metadata.NewKube(kubeconfig)
+		if err != nil {
+			return nil, fmt.Errorf("failed to initialize Kubernetes metadata provider: %w", err)
+		}
+		p := metadata.NewCache(kubeMeta, cacheTTL)
+		return p, nil
+	}
+
+	return metadata.NewNoop(), nil
 }
 
 // ParseHumanReadableSize parses a human-readable size string into an integer.
