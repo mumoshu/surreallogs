@@ -26,7 +26,11 @@ type fileTailer struct {
 	// It is used to avoid allocating a new buffer on each read,
 	// and to avoid unbounded memory usage.
 	logLineReadBufferSize int
-	lineBuffer            []byte
+	lineBufferPool        [][]byte
+	// The maxiumum capacity of the pool
+	lineBufferPoolCap int
+	// The current position in the pool
+	lineBufferPoolPos int
 
 	ino     uint64
 	logFile *os.File
@@ -38,10 +42,10 @@ type fileTailer struct {
 
 	started atomic.Bool
 
-	ch chan<- []byte
+	ch chan<- *logEntry
 }
 
-func newFileTailer(posFileDir string, ino uint64, path string, ch chan<- []byte) (*fileTailer, error) {
+func newFileTailer(posFileDir string, ino uint64, path string, ch chan<- *logEntry) (*fileTailer, error) {
 	if err := os.MkdirAll(posFileDir, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create position file directory: %w", err)
 	}
@@ -125,7 +129,16 @@ func (sc *fileTailer) Start() {
 		sc.logLineReadBufferSize = DefaultLogLineReadBufferSize
 	}
 
-	sc.lineBuffer = make([]byte, sc.logLineReadBufferSize)
+	chCap := cap(sc.ch)
+	// Assuming we can only buffer chCap log lines in the channel,
+	// we need one more pool size not to accidentally put back the pooled line buffer which is still in use.
+	poolCap := chCap + 1
+	eachLogLineReadBufferSize := sc.logLineReadBufferSize / poolCap
+	sc.lineBufferPoolCap = poolCap
+	sc.lineBufferPool = make([][]byte, poolCap)
+	for i := range sc.lineBufferPool {
+		sc.lineBufferPool[i] = make([]byte, eachLogLineReadBufferSize)
+	}
 
 	sc.stopCh = make(chan struct{})
 	sc.stoppedCh = make(chan struct{})
@@ -163,7 +176,9 @@ func (sc *fileTailer) readAndSendTail() {
 		return
 	}
 
-	read, err := sc.logFile.Read(sc.lineBuffer)
+	lineBuffer := sc.lineBufferFromPool()
+
+	read, err := sc.logFile.Read(lineBuffer)
 	if err != nil {
 		log.Printf("Failed to read log file after reading %d bytes: %v", read, err)
 		return
@@ -176,8 +191,11 @@ func (sc *fileTailer) readAndSendTail() {
 	log.Printf("Read %d bytes from %s", read, sc.logFile.Name())
 
 	for i := 0; i < read; i++ {
-		if sc.lineBuffer[i] == '\n' {
-			sc.ch <- sc.lineBuffer[readTo:i]
+		if lineBuffer[i] == '\n' {
+			sc.ch <- &logEntry{
+				path: sc.logFile.Name(),
+				line: lineBuffer[readTo:i],
+			}
 
 			readTo = i + 1
 		}
@@ -192,4 +210,26 @@ func (sc *fileTailer) stop() {
 	if err := sc.logFile.Close(); err != nil {
 		log.Printf("Failed to close log file: %v", err)
 	}
+}
+
+// lineBufferFromPool returns a line buffer from the pool.
+// It returns the next line buffer in the pool, and increments the position.
+// This works correctly only if we can guarantee the oldest line buffer in the pool
+// is unused (or implicitly returned to the pool).
+// In fileTailer, this is done by making the pool size a little bigger than the channel used to
+// send line buffers to the consumer.
+// Let's say the channel capacity is 10, and the pool size is 11.
+// Then, the oldest item in the channel is the one that is currently or to be processed by the consumer.
+// If fileTailer reused this line buffer, it would be a problem.
+// We avoid this by making the pool size a little bigger than the channel capacity.
+// This way, the oldest item in the channel is younger than the oldest item in the pool (which is recyclable via this function).
+func (sc *fileTailer) lineBufferFromPool() []byte {
+	if sc.lineBufferPoolPos == sc.lineBufferPoolCap {
+		sc.lineBufferPoolPos = 0
+	}
+
+	lineBuf := sc.lineBufferPool[sc.lineBufferPoolPos]
+	sc.lineBufferPoolPos++
+
+	return lineBuf
 }

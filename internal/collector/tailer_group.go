@@ -8,6 +8,15 @@ import (
 	"time"
 )
 
+// logEntry is each log entry read from the log file.
+type logEntry struct {
+	// The path of the log file.
+	path string
+
+	// The log line.
+	line []byte
+}
+
 // tailerGroup is responsible for reading log entries from log files.
 // The log file is added via the startCollecting method, and removed via the stopCollecting method.
 //
@@ -18,10 +27,10 @@ type tailerGroup struct {
 	inoToSubcollector     map[uint64]*fileTailer
 	readInterval          time.Duration
 	logLineReadBufferSize int
-	ch                    chan<- []byte
+	ch                    chan<- *logEntry
 }
 
-func newTailerGroup(posFileDir string, readInterval time.Duration, ch chan<- []byte) *tailerGroup {
+func newTailerGroup(posFileDir string, readInterval time.Duration, ch chan<- *logEntry) *tailerGroup {
 	return &tailerGroup{
 		posFileDir:        posFileDir,
 		inoToSubcollector: make(map[uint64]*fileTailer),

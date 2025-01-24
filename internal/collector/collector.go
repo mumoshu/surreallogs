@@ -14,16 +14,23 @@ import (
 	"github.com/fsnotify/fsnotify"
 	"github.com/surrealdb/surrealdb.go"
 	"github.com/surrealdb/surreallogs/internal/config"
+	"github.com/surrealdb/surreallogs/internal/metadata"
 )
 
+// Collector is the unit that collects logs from the configured paths, enriches them with metadata provided by the same metadata provider,
+// and writes them to the same SurrealDB instance.
+//
+// You can have two or more Collectors in case you need to collect logs from different paths,
+// and write them to different SurrealDB instances.
 type Collector struct {
 	cfg   *config.Config
 	db    *surrealdb.DB
 	queue Queue
 
-	logLinesCh chan []byte
+	logEntryCh chan *logEntry
 
-	tailerGroup *tailerGroup
+	tailerGroup      *tailerGroup
+	metadataProvider metadata.Provider
 }
 
 func New(cfg *config.Config) (*Collector, error) {
@@ -66,9 +73,9 @@ func New(cfg *config.Config) (*Collector, error) {
 	syncQueue := NewSyncQueue(durableQueue)
 
 	// We buffer up to 1024 log lines to avoid blocking the reader.
-	logLineCh := make(chan []byte, 1024)
+	logEntryCh := make(chan *logEntry, 1024)
 
-	tg := newTailerGroup(cfg.Collector.ReadPosDir, readInterval, logLineCh)
+	tg := newTailerGroup(cfg.Collector.ReadPosDir, readInterval, logEntryCh)
 
 	logLineReadBufferSize, err := ParseHumanReadableSize(cfg.Collector.LogLineReadBufferSize)
 	if err != nil {
@@ -78,11 +85,12 @@ func New(cfg *config.Config) (*Collector, error) {
 	tg.logLineReadBufferSize = logLineReadBufferSize
 
 	return &Collector{
-		cfg:         cfg,
-		db:          db,
-		queue:       syncQueue,
-		logLinesCh:  logLineCh,
-		tailerGroup: tg,
+		cfg:              cfg,
+		db:               db,
+		queue:            syncQueue,
+		logEntryCh:       logEntryCh,
+		tailerGroup:      tg,
+		metadataProvider: metadata.NewNoop(),
 	}, nil
 }
 
@@ -156,15 +164,19 @@ func (c *Collector) startPipingLogsToQueue(ctx context.Context) {
 			select {
 			case <-ctx.Done():
 				return
-			case line := <-c.logLinesCh:
+			case entry := <-c.logEntryCh:
 				var msg map[string]interface{}
-				if err := json.Unmarshal(line, &msg); err != nil {
+				if err := json.Unmarshal(entry.line, &msg); err != nil {
 					log.Printf("Failed to unmarshal log entry: %v", err)
 					msg = map[string]interface{}{
 						"message": map[string]string{
-							"text": string(line),
+							"text": string(entry.line),
 						},
 					}
+				}
+
+				if err := c.metadataProvider.Fetch(ctx, entry.path, msg); err != nil {
+					log.Printf("Failed to fetch metadata: %v", err)
 				}
 
 				logEntry := LogEntry{
