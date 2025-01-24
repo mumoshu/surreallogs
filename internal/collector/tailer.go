@@ -11,6 +11,10 @@ import (
 	"time"
 )
 
+const (
+	DefaultLogLineReadBufferSize = 1024 * 1024
+)
+
 // fileTailer is responsible for reading log lines from a log file.
 // It is used to read log lines from a log file and send them to a channel.
 //
@@ -18,6 +22,12 @@ import (
 //
 // fileTailer is not thread-safe, so it should be protected by a mutex, if used in a multi-threaded environment.
 type fileTailer struct {
+	// This is the reused and fixed buffer size for reading log lines.
+	// It is used to avoid allocating a new buffer on each read,
+	// and to avoid unbounded memory usage.
+	logLineReadBufferSize int
+	lineBuffer            []byte
+
 	ino     uint64
 	logFile *os.File
 	posFile *os.File
@@ -85,16 +95,37 @@ func newFileTailer(posFileDir string, ino uint64, path string, ch chan<- []byte)
 		return nil, fmt.Errorf("failed to open log file: %w", err)
 	}
 
-	return &fileTailer{ino: ino, logFile: logFile, posFile: posFile, pos: pos, started: atomic.Bool{}, ch: ch}, nil
+	return &fileTailer{
+		ino:                   ino,
+		logFile:               logFile,
+		posFile:               posFile,
+		pos:                   pos,
+		started:               atomic.Bool{},
+		ch:                    ch,
+		logLineReadBufferSize: DefaultLogLineReadBufferSize,
+	}, nil
 }
 
-func (sc *fileTailer) start() {
+// Start starts the tailer.
+//
+// Start never fails immediately. However, if the started tailer is working or not-
+// that's another story.
+//
+// Once a tailer is started, it will keep running with handling temporary failures graccefully by itself,
+// and all the caller can do is to observe or Stop it.
+func (sc *fileTailer) Start() {
 	log.Printf("Starting tailer for inode %d", sc.ino)
 
 	if sc.started.Load() {
 		log.Printf("Tailer for inode %d is already started", sc.ino)
 		return
 	}
+
+	if sc.logLineReadBufferSize == 0 {
+		sc.logLineReadBufferSize = DefaultLogLineReadBufferSize
+	}
+
+	sc.lineBuffer = make([]byte, sc.logLineReadBufferSize)
 
 	sc.stopCh = make(chan struct{})
 	sc.stoppedCh = make(chan struct{})
@@ -132,9 +163,7 @@ func (sc *fileTailer) readAndSendTail() {
 		return
 	}
 
-	lineBuffer := make([]byte, 1024*1024)
-
-	read, err := sc.logFile.Read(lineBuffer)
+	read, err := sc.logFile.Read(sc.lineBuffer)
 	if err != nil {
 		log.Printf("Failed to read log file after reading %d bytes: %v", read, err)
 		return
@@ -147,8 +176,8 @@ func (sc *fileTailer) readAndSendTail() {
 	log.Printf("Read %d bytes from %s", read, sc.logFile.Name())
 
 	for i := 0; i < read; i++ {
-		if lineBuffer[i] == '\n' {
-			sc.ch <- lineBuffer[readTo:i]
+		if sc.lineBuffer[i] == '\n' {
+			sc.ch <- sc.lineBuffer[readTo:i]
 
 			readTo = i + 1
 		}

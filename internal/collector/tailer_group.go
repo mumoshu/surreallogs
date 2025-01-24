@@ -14,10 +14,11 @@ import (
 // The tailerGroup is responsible for reading log entries from the log file and sending them to a channel.
 // The channel is supposed to be read by the collector, which writes the log entries to SurrealDB.
 type tailerGroup struct {
-	posFileDir        string
-	inoToSubcollector map[uint64]*fileTailer
-	readInterval      time.Duration
-	ch                chan<- []byte
+	posFileDir            string
+	inoToSubcollector     map[uint64]*fileTailer
+	readInterval          time.Duration
+	logLineReadBufferSize int
+	ch                    chan<- []byte
 }
 
 func newTailerGroup(posFileDir string, readInterval time.Duration, ch chan<- []byte) *tailerGroup {
@@ -62,7 +63,9 @@ func (c *tailerGroup) startTailing(path string) error {
 			return fmt.Errorf("failed to create subcollector: %w", err)
 		}
 
-		sc.start()
+		sc.logLineReadBufferSize = c.logLineReadBufferSize
+
+		sc.Start()
 	}
 
 	return nil

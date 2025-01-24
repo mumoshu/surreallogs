@@ -25,6 +25,8 @@ type Config struct {
 			// FlushInterval is the interval at which the buffer file is flushed to SurrealDB.
 			FlushInterval string `yaml:"flush_interval"`
 		} `yaml:"buffer"`
+		// The size of the bounded and reused buffer for batch-readling log lines from the collected log file
+		LogLineReadBufferSize string `yaml:"log_line_read_buffer_size"`
 	} `yaml:"collector"`
 
 	SurrealDB SurrealDB `yaml:"surrealdb"`

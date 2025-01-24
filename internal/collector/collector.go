@@ -68,12 +68,21 @@ func New(cfg *config.Config) (*Collector, error) {
 	// We buffer up to 1024 log lines to avoid blocking the reader.
 	logLineCh := make(chan []byte, 1024)
 
+	tg := newTailerGroup(cfg.Collector.ReadPosDir, readInterval, logLineCh)
+
+	logLineReadBufferSize, err := ParseHumanReadableSize(cfg.Collector.LogLineReadBufferSize)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse log line read buffer size: %w", err)
+	}
+
+	tg.logLineReadBufferSize = logLineReadBufferSize
+
 	return &Collector{
 		cfg:         cfg,
 		db:          db,
 		queue:       syncQueue,
 		logLinesCh:  logLineCh,
-		tailerGroup: newTailerGroup(cfg.Collector.ReadPosDir, readInterval, logLineCh),
+		tailerGroup: tg,
 	}, nil
 }
 
