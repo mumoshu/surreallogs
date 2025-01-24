@@ -74,7 +74,6 @@ func (b *SyncFileQueue) MarkRead(n int) error {
 // For example, if it is flushed every 10 seconds, then the window of opportunity for a log entry
 // to be lost is 10 seconds.
 type DurableQueue struct {
-	path          string
 	maxSize       int
 	flushInterval time.Duration
 
