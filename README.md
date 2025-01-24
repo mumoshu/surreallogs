@@ -20,7 +20,7 @@ collector --config config.yaml
 
 The basic configuration is as follows:
 
-```
+```yaml
 # Specify the SurrealDB connection information.
 surrealdb:
   url: ws://localhost:8000
@@ -43,6 +43,14 @@ collector:
     path: /tmp/surreallogs.buffer
     max_size: 1MB
     flush_interval: 3s
+  ## For Kubernetes pod logs (Needs to mount /var/log/pods and its symlink targets on the host to the container)
+  # watch_logs:
+  #   - path: /var/log/pods
+  #     recursive: true
+  # metadata:
+  #   kubernetes:
+  #     kubeconfig: path/to/kubeconfig
+  #     cache_ttl: 30s
 ```
 
 ## Roadmap
