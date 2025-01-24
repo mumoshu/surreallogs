@@ -3,12 +3,14 @@ package collector
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/surrealdb/surrealdb.go"
@@ -32,6 +34,10 @@ type Collector struct {
 
 	tailerGroup      TailerGroup
 	metadataProvider metadata.Provider
+
+	mu *sync.Mutex
+
+	running bool
 }
 
 type TailerGroup interface {
@@ -103,6 +109,7 @@ func New(cfg *config.Config) (*Collector, error) {
 		logEntryCh:       logEntryCh,
 		tailerGroup:      tg,
 		metadataProvider: metadataProvider,
+		mu:               &sync.Mutex{},
 	}, nil
 }
 
@@ -169,6 +176,16 @@ func ParseHumanReadableSize(size string) (int, error) {
 }
 
 func (c *Collector) Run(ctx context.Context) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.running {
+		return errors.New("already running")
+	}
+
+	c.running = true
+	c.mu.Unlock()
+
 	if err := c.startReadingLogs(); err != nil {
 		return fmt.Errorf("failed to start reading logs: %w", err)
 	}
